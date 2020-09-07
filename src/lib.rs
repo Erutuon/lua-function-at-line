@@ -1,40 +1,201 @@
+#![allow(dead_code, unused)]
 use full_moon::{
-    ast::{AstError, Block, Expression, Stmt, Var, Value},
-    tokenizer::TokenType,
+    ast::{
+        AstError, Block, Call, Expression, FunctionArgs, Index, Prefix, Stmt,
+        Suffix, UnOp, Value, Var,
+    },
+    tokenizer::{TokenReference, TokenType},
 };
+use std::fmt::Write;
+
+mod traits;
+use traits::FirstToken;
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
 pub struct FunctionSpan {
     pub start: usize,
     pub end: usize,
-    pub name: String,
+    pub name: Option<String>,
 }
 
-pub fn process_vars_and_exprs<'a>(
-    iter: impl IntoIterator<Item = (&'a Var<'a>, &'a Expression<'a>)>,
-    functions: &mut Vec<FunctionSpan>,
-) {
-    for (var, expr) in iter {
-        match expr {
-            Expression::Parentheses {
-                contained,
-                expression,
-            } => {
-                if let Expression::Value { value, binop: None } = &**expression {
-                    if let Value::Function((_, body)) = &**value {
-                        
+enum FunctionName<'a> {
+    Identifier(&'a TokenReference<'a>),
+    Complex(&'a Var<'a>),
+}
+
+impl<'a> FunctionName<'a> {
+    fn to_string(&self) -> Result<String, AstError<'a>> {
+        match self {
+            FunctionName::Identifier(token) => {
+                if let TokenType::Identifier { identifier } = token.token_type()
+                {
+                    Ok(identifier.to_string())
+                } else {
+                    Err(AstError::UnexpectedToken {
+                        token: token.token().to_owned(),
+                        additional: Some("expected identifier".into()),
+                    })
+                }
+            }
+            FunctionName::Complex(var) => {
+                match var {
+                    Var::Expression(expr) => {
+                        let prefix = match expr.prefix() {
+                            Prefix::Name(name) => name,
+                            Prefix::Expression(expr) => {
+                                return Err(AstError::UnexpectedToken {
+                                    token: expr
+                                        .first_token()
+                                        .token()
+                                        .to_owned(),
+                                    additional: Some(
+                                        "expected identifier".into(),
+                                    ),
+                                })
+                            }
+                        };
+                        let mut var = prefix.to_string();
+                        for suffix in expr.iter_suffixes() {
+                            if let Suffix::Index(index) = suffix {
+                                match index {
+                                    Index::Brackets { expression, .. } => {
+                                        // Don't bother removing whitespace from expression.
+                                        write!(var, "[{}]", expression);
+                                    }
+                                    Index::Dot { name, .. } => {
+                                        if let TokenType::Identifier {
+                                            identifier,
+                                            ..
+                                        } = name.token_type()
+                                        {
+                                            write!(var, ".{}", identifier);
+                                        } else {
+                                            return Err(
+                                                AstError::UnexpectedToken {
+                                                    token: suffix
+                                                        .first_token()
+                                                        .token()
+                                                        .to_owned(),
+                                                    additional: Some(
+                                                        "expected identifier"
+                                                            .into(),
+                                                    ),
+                                                },
+                                            );
+                                        }
+                                    }
+                                }
+                            } else {
+                                return Err(AstError::UnexpectedToken {
+                                    token: suffix
+                                        .first_token()
+                                        .token()
+                                        .to_owned(),
+                                    additional: Some(
+                                        "expected indexing brackets".into(),
+                                    ),
+                                });
+                            }
+                        }
+                        Ok(var)
+                    }
+                    Var::Name(name) => {
+                        if let TokenType::Identifier { identifier, .. } =
+                            name.token_type()
+                        {
+                            Ok(identifier.to_string())
+                        } else {
+                            Err(AstError::UnexpectedToken {
+                                token: name.token().to_owned(),
+                                additional: Some("expected identifier".into()),
+                            })
+                        }
                     }
                 }
             }
-            Expression::UnaryOperator { unop, expression } => {}
-            Expression::Value { value, binop } => {}
         }
     }
 }
 
-pub fn gather_function_line_spans<'a>(
+fn process_expression<'a, 'b>(
+    var: Option<FunctionName<'a>>,
+    mut expr: &'a Expression<'a>,
+    functions: &'b mut Vec<FunctionSpan>,
+) -> Result<(), AstError<'a>> {
+    // Strip off layers of parentheses.
+    while let Expression::Parentheses { expression, .. } = expr {
+        // eprintln!("var: {}, expression: {}", var.as_ref().map(|v| v.to_string().unwrap()).unwrap_or("?".to_string()), expression);
+        expr = expression.as_ref();
+    }
+    match expr {
+        Expression::Value { value, binop } => {
+            match value.as_ref() {
+                Value::Function((keyword, body)) => {
+                    let start = keyword.start_position().line();
+                    let end = body.end_token().end_position().line();
+                    let var = var
+                        .filter(|_| binop.is_none())
+                        .map(|var| var.to_string())
+                        .transpose()?;
+                    functions.push(FunctionSpan {
+                        start,
+                        end,
+                        name: var,
+                    });
+                    gather_function_line_spans(body.block(), functions)?;
+                }
+                Value::ParseExpression(expr) => {
+                    process_expression(var.filter(|_| binop.is_none()), expr, functions)?;
+                }
+                Value::FunctionCall(call) => {
+                    for suffix in call.iter_suffixes() {
+                        if let Suffix::Call(call) = suffix {
+                            let args = match call {
+                                Call::AnonymousCall(args) => args,
+                                Call::MethodCall(call) => call.args(),
+                            };
+                            match args {
+                                FunctionArgs::Parentheses {
+                                    parentheses,
+                                    arguments,
+                                } => {
+                                    for expr in arguments {
+                                        process_expression(
+                                            None, expr, functions,
+                                        )?;
+                                    }
+                                }
+                                FunctionArgs::TableConstructor(_) => todo!(
+                                    "handle functions in table constructors"
+                                ),
+                                FunctionArgs::String(_) => {}
+                            }
+                        }
+                    }
+                }
+                Value::TableConstructor(_) => {
+                    todo!("handle functions in table constructors")
+                }
+                Value::Number(_) => {}
+                Value::String(_) => {}
+                Value::Symbol(_) => {}
+                Value::Var(_) => todo!("handle var"),
+            }
+            if let Some(tail) = binop {
+                process_expression(None, tail.rhs(), functions)?;
+            }
+        }
+        Expression::UnaryOperator { expression, .. } => {
+            process_expression(None, expression, functions)?;
+        }
+        Expression::Parentheses { .. } => unreachable!(),
+    }
+    Ok(())
+}
+
+pub fn gather_function_line_spans<'a, 'b>(
     block: &'a Block<'a>,
-    functions: &mut Vec<FunctionSpan>,
+    functions: &'b mut Vec<FunctionSpan>,
 ) -> Result<(), AstError<'a>> {
     for statement in block.iter_stmts() {
         match statement {
@@ -46,7 +207,7 @@ pub fn gather_function_line_spans<'a>(
                         let end =
                             func.func_body().end_token().end_position().line();
                         functions.push(FunctionSpan {
-                            name: identifier.to_string(),
+                            name: Some(identifier.to_string()),
                             start,
                             end,
                         });
@@ -105,17 +266,36 @@ pub fn gather_function_line_spans<'a>(
                 let start = func.function_token().start_position().line();
                 let end = func.body().end_token().end_position().line();
                 functions.push(FunctionSpan {
-                    name: formatted_name,
+                    name: Some(formatted_name),
                     start,
                     end,
                 });
                 gather_function_line_spans(func.body().block(), functions)?;
             }
+            // Todo: process expressions with no variable name.
             Stmt::Assignment(asgn) => {
-                let (exprs, vars) = (asgn.var_list(), asgn.expr_list());
-                process_vars_and_exprs(exprs.iter().zip(vars), functions);
+                for (var, mut expr) in
+                    asgn.var_list().iter().zip(asgn.expr_list())
+                {
+                    process_expression(
+                        Some(FunctionName::Complex(var)),
+                        expr,
+                        functions,
+                    )?;
+                }
             }
-            Stmt::LocalAssignment(_) => {}
+            // Todo: process expressions with no variable name.
+            Stmt::LocalAssignment(asgn) => {
+                for (name, expr) in
+                    asgn.name_list().iter().zip(asgn.expr_list())
+                {
+                    process_expression(
+                        Some(FunctionName::Identifier(name)),
+                        expr,
+                        functions,
+                    )?;
+                }
+            }
             Stmt::Do(do_stmt) => {
                 gather_function_line_spans(do_stmt.block(), functions)?;
             }
@@ -149,114 +329,4 @@ pub fn gather_function_line_spans<'a>(
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::{gather_function_line_spans, FunctionSpan};
-    use full_moon::parse;
-
-    fn check_result(code: &str, expected: &[FunctionSpan]) {
-        let mut functions = Vec::new();
-        let code = parse(code).unwrap();
-        gather_function_line_spans(&code.nodes(), &mut functions).unwrap();
-        assert_eq!(&functions, &expected);
-    }
-
-    #[test]
-    fn top_level_functions() {
-        check_result(
-            &"local function first_do() end
-            function then_do() end",
-            &[
-                FunctionSpan {
-                    start: 1,
-                    end: 1,
-                    name: "first_do".into(),
-                },
-                FunctionSpan {
-                    start: 2,
-                    end: 2,
-                    name: "then_do".into(),
-                },
-            ],
-        );
-    }
-
-    #[test]
-    fn local_function_in_local_function() {
-        check_result(
-            &"local function add(y)
-                local function inner()
-                end
-                return x + y
-            end",
-            &[
-                FunctionSpan {
-                    start: 1,
-                    end: 5,
-                    name: "add".into(),
-                },
-                FunctionSpan {
-                    start: 2,
-                    end: 3,
-                    name: "inner".into(),
-                },
-            ],
-        );
-    }
-
-    #[test]
-    fn function_with_fields_in_function_with_fields() {
-        check_result(
-            &"function x.y:z()
-                function a.b.c()
-                    local var = const;
-                end
-            end",
-            &[
-                FunctionSpan {
-                    start: 1,
-                    end: 5,
-                    name: "x.y:z".into(),
-                },
-                FunctionSpan {
-                    start: 2,
-                    end: 4,
-                    name: "a.b.c".into(),
-                },
-            ],
-        );
-    }
-
-    #[test]
-    fn spread_out_method_or_function_calls_are_compacted() {
-        check_result(
-            &"function
-            
-            very
-            .
-            spread
-            :
-            out()
-            end
-            
-            function
-            
-                very
-                    .
-                        indented
-                            ()
-                        end",
-            &[
-                FunctionSpan {
-                    start: 1,
-                    end: 8,
-                    name: "very.spread:out".into(),
-                },
-                FunctionSpan {
-                    start: 10,
-                    end: 16,
-                    name: "very.indented".into(),
-                },
-            ],
-        );
-    }
-}
+mod tests;
