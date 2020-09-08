@@ -1,5 +1,11 @@
-use std::borrow::Cow;
-use full_moon::{ast::{Value, Expression, UnOp, FunctionCall, TableConstructor, span::ContainedSpan, Var, Prefix, VarExpression, Suffix, Call, FunctionArgs, Index}, tokenizer::TokenReference};
+use full_moon::{
+    ast::{
+        span::ContainedSpan, Call, Expression, FunctionArgs, FunctionCall,
+        Index, Prefix, Suffix, TableConstructor, UnOp, Value, Var,
+        VarExpression,
+    },
+    tokenizer::TokenReference,
+};
 
 pub(crate) trait FirstToken {
     fn first_token(&self) -> &TokenReference;
@@ -11,27 +17,23 @@ impl<'a> FirstToken for Expression<'a> {
             Expression::Parentheses { contained, .. } => {
                 contained.first_token()
             }
-            Expression::UnaryOperator { unop, .. } => {
-                match unop {
-                    UnOp::Minus(op) => op,
-                    UnOp::Not(op) => op,
-                    UnOp::Hash(op) => op,
+            Expression::UnaryOperator { unop, .. } => match unop {
+                UnOp::Minus(op) => op,
+                UnOp::Not(op) => op,
+                UnOp::Hash(op) => op,
+            },
+            Expression::Value { value, .. } => match &**value {
+                Value::Function((keyword, _)) => keyword,
+                Value::FunctionCall(call) => call.first_token(),
+                Value::TableConstructor(constructor) => {
+                    constructor.first_token()
                 }
-            }
-            Expression::Value { value, .. } => {
-                match &**value {
-                    Value::Function((keyword, _)) => keyword,
-                    Value::FunctionCall(call) => call.first_token(),
-                    Value::TableConstructor(constructor) => {
-                        constructor.first_token()
-                    }
-                    Value::Number(number) => number,
-                    Value::ParseExpression(expr) => expr.first_token(),
-                    Value::String(string) => string,
-                    Value::Symbol(symbol) => symbol,
-                    Value::Var(var) => var.first_token()
-                }
-            }
+                Value::Number(number) => number,
+                Value::ParseExpression(expr) => expr.first_token(),
+                Value::String(string) => string,
+                Value::Symbol(symbol) => symbol,
+                Value::Var(var) => var.first_token(),
+            },
         }
     }
 }
@@ -51,13 +53,15 @@ impl<'a> FirstToken for TableConstructor<'a> {
 impl<'a> FirstToken for Suffix<'a> {
     fn first_token(&self) -> &TokenReference {
         match self {
-            Suffix::Call(Call::AnonymousCall(args)) => {
-                match args {
-                    FunctionArgs::Parentheses { parentheses, .. } => parentheses.first_token(),
-                    FunctionArgs::String(string) => string,
-                    FunctionArgs::TableConstructor(constructor) => constructor.first_token(),
+            Suffix::Call(Call::AnonymousCall(args)) => match args {
+                FunctionArgs::Parentheses { parentheses, .. } => {
+                    parentheses.first_token()
                 }
-            }
+                FunctionArgs::String(string) => string,
+                FunctionArgs::TableConstructor(constructor) => {
+                    constructor.first_token()
+                }
+            },
             Suffix::Call(Call::MethodCall(method)) => method.colon_token(),
             Suffix::Index(index) => index.first_token(),
         }

@@ -1,11 +1,11 @@
-use full_moon::{
-    parse,
-};
+use full_moon::parse;
 
 fn main() {
-    dbg!(parse("_ = (function()
-
-    end) + (function()
-    
-    end)").unwrap());
+    dbg!(parse(r#"x
+    [
+        "y"
+    ]
+    =
+    function()
+    end"#).unwrap());
 }

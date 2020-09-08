@@ -1,15 +1,25 @@
-#![allow(dead_code, unused)]
 use full_moon::{
     ast::{
         AstError, Block, Call, Expression, FunctionArgs, Index, Prefix, Stmt,
-        Suffix, UnOp, Value, Var,
+        Suffix, Value, Var,
     },
     tokenizer::{TokenReference, TokenType},
 };
-use std::fmt::Write;
+use itertools::{EitherOrBoth, Itertools};
+use std::{borrow::Cow, fmt::Write};
 
 mod traits;
 use traits::FirstToken;
+
+fn unexpected_token<'a>(
+    token_ref: &'a TokenReference<'a>,
+    msg: &'_ str,
+) -> AstError<'a> {
+    AstError::UnexpectedToken {
+        token: token_ref.token().to_owned(),
+        additional: Some(msg.to_owned().into()),
+    }
+}
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
 pub struct FunctionSpan {
@@ -18,9 +28,112 @@ pub struct FunctionSpan {
     pub name: Option<String>,
 }
 
+fn remove_trivia<'a>(token_ref: &'a TokenReference<'a>) -> TokenReference<'a> {
+    TokenReference::new(vec![], token_ref.token().to_owned(), vec![])
+}
+
 enum FunctionName<'a> {
     Identifier(&'a TokenReference<'a>),
     Complex(&'a Var<'a>),
+}
+
+impl<'a> From<&'a Cow<'a, TokenReference<'a>>> for FunctionName<'a> {
+    fn from(token: &'a Cow<'a, TokenReference<'a>>) -> Self {
+        FunctionName::Identifier(token.as_ref())
+    }
+}
+
+impl<'a> From<&'a Var<'a>> for FunctionName<'a> {
+    fn from(var: &'a Var<'a>) -> Self {
+        FunctionName::Complex(var)
+    }
+}
+
+fn var_to_string<'a>(var: &'a Var<'a>) -> Result<String, AstError<'a>> {
+    match var {
+        Var::Expression(expr) => {
+            let prefix = match expr.prefix() {
+                Prefix::Name(name) => name.token(),
+                Prefix::Expression(expr) => {
+                    return Err(unexpected_token(
+                        expr.first_token(),
+                        "expected identifier",
+                    ));
+                }
+            };
+            let mut var = prefix.to_string();
+            for suffix in expr.iter_suffixes() {
+                if let Suffix::Index(index) = suffix {
+                    match index {
+                        Index::Brackets { expression, .. } => {
+                            // Remove some whitespace and wrapping parentheses from some types of expression.
+                            let mut expr = expression;
+                            while let Expression::Parentheses {
+                                expression,
+                                ..
+                            } = expression
+                            {
+                                expr = expression;
+                            }
+                            while let Expression::Value { value, binop: None } =
+                                expr
+                            {
+                                if let Value::ParseExpression(expression) =
+                                    value.as_ref()
+                                {
+                                    expr = expression;
+                                } else {
+                                    break;
+                                }
+                            }
+                            if let Expression::Value { value, binop: None } =
+                                expr
+                            {
+                                if let Value::String(token)
+                                | Value::Number(token)
+                                | Value::Symbol(token) = value.as_ref()
+                                {
+                                    write!(var, "[{}]", remove_trivia(token))
+                                        .unwrap();
+                                } else {
+                                    write!(var, "[{}]", value).unwrap();
+                                }
+                            } else {
+                                write!(var, "[{}]", expression).unwrap();
+                            }
+                        }
+                        Index::Dot { name, .. } => {
+                            if let TokenType::Identifier {
+                                identifier, ..
+                            } = name.token_type()
+                            {
+                                write!(var, ".{}", identifier).unwrap();
+                            } else {
+                                return Err(unexpected_token(
+                                    suffix.first_token(),
+                                    "expected identifier",
+                                ));
+                            }
+                        }
+                    }
+                } else {
+                    return Err(unexpected_token(
+                        suffix.first_token(),
+                        "expected indexing brackets",
+                    ));
+                }
+            }
+            Ok(var)
+        }
+        Var::Name(name) => {
+            if let TokenType::Identifier { identifier, .. } = name.token_type()
+            {
+                Ok(identifier.to_string())
+            } else {
+                Err(unexpected_token(name, "expected identifier"))
+            }
+        }
+    }
 }
 
 impl<'a> FunctionName<'a> {
@@ -31,90 +144,38 @@ impl<'a> FunctionName<'a> {
                 {
                     Ok(identifier.to_string())
                 } else {
-                    Err(AstError::UnexpectedToken {
-                        token: token.token().to_owned(),
-                        additional: Some("expected identifier".into()),
-                    })
+                    Err(unexpected_token(token, "expected identifier"))
                 }
             }
-            FunctionName::Complex(var) => {
-                match var {
-                    Var::Expression(expr) => {
-                        let prefix = match expr.prefix() {
-                            Prefix::Name(name) => name,
-                            Prefix::Expression(expr) => {
-                                return Err(AstError::UnexpectedToken {
-                                    token: expr
-                                        .first_token()
-                                        .token()
-                                        .to_owned(),
-                                    additional: Some(
-                                        "expected identifier".into(),
-                                    ),
-                                })
-                            }
-                        };
-                        let mut var = prefix.to_string();
-                        for suffix in expr.iter_suffixes() {
-                            if let Suffix::Index(index) = suffix {
-                                match index {
-                                    Index::Brackets { expression, .. } => {
-                                        // Don't bother removing whitespace from expression.
-                                        write!(var, "[{}]", expression);
-                                    }
-                                    Index::Dot { name, .. } => {
-                                        if let TokenType::Identifier {
-                                            identifier,
-                                            ..
-                                        } = name.token_type()
-                                        {
-                                            write!(var, ".{}", identifier);
-                                        } else {
-                                            return Err(
-                                                AstError::UnexpectedToken {
-                                                    token: suffix
-                                                        .first_token()
-                                                        .token()
-                                                        .to_owned(),
-                                                    additional: Some(
-                                                        "expected identifier"
-                                                            .into(),
-                                                    ),
-                                                },
-                                            );
-                                        }
-                                    }
-                                }
-                            } else {
-                                return Err(AstError::UnexpectedToken {
-                                    token: suffix
-                                        .first_token()
-                                        .token()
-                                        .to_owned(),
-                                    additional: Some(
-                                        "expected indexing brackets".into(),
-                                    ),
-                                });
-                            }
-                        }
-                        Ok(var)
-                    }
-                    Var::Name(name) => {
-                        if let TokenType::Identifier { identifier, .. } =
-                            name.token_type()
-                        {
-                            Ok(identifier.to_string())
-                        } else {
-                            Err(AstError::UnexpectedToken {
-                                token: name.token().to_owned(),
-                                additional: Some("expected identifier".into()),
-                            })
-                        }
+            FunctionName::Complex(var) => var_to_string(var),
+        }
+    }
+}
+
+fn process_suffixes<'a>(
+    suffixes: impl Iterator<Item = &'a Suffix<'a>> + 'a,
+    functions: &mut Vec<FunctionSpan>,
+) -> Result<(), AstError<'a>> {
+    for suffix in suffixes {
+        if let Suffix::Call(call) = suffix {
+            let args = match call {
+                Call::AnonymousCall(args) => args,
+                Call::MethodCall(call) => call.args(),
+            };
+            match args {
+                FunctionArgs::Parentheses { arguments, .. } => {
+                    for expr in arguments {
+                        process_expression(None, expr, functions)?;
                     }
                 }
+                FunctionArgs::TableConstructor(_) => {
+                    todo!("handle functions in table constructors")
+                }
+                FunctionArgs::String(_) => {}
             }
         }
     }
+    Ok(())
 }
 
 fn process_expression<'a, 'b>(
@@ -145,41 +206,26 @@ fn process_expression<'a, 'b>(
                     gather_function_line_spans(body.block(), functions)?;
                 }
                 Value::ParseExpression(expr) => {
-                    process_expression(var.filter(|_| binop.is_none()), expr, functions)?;
+                    process_expression(
+                        var.filter(|_| binop.is_none()),
+                        expr,
+                        functions,
+                    )?;
                 }
                 Value::FunctionCall(call) => {
-                    for suffix in call.iter_suffixes() {
-                        if let Suffix::Call(call) = suffix {
-                            let args = match call {
-                                Call::AnonymousCall(args) => args,
-                                Call::MethodCall(call) => call.args(),
-                            };
-                            match args {
-                                FunctionArgs::Parentheses {
-                                    parentheses,
-                                    arguments,
-                                } => {
-                                    for expr in arguments {
-                                        process_expression(
-                                            None, expr, functions,
-                                        )?;
-                                    }
-                                }
-                                FunctionArgs::TableConstructor(_) => todo!(
-                                    "handle functions in table constructors"
-                                ),
-                                FunctionArgs::String(_) => {}
-                            }
-                        }
-                    }
+                    process_suffixes(call.iter_suffixes(), functions)?;
                 }
                 Value::TableConstructor(_) => {
                     todo!("handle functions in table constructors")
                 }
+                Value::Var(var) => {
+                    if let Var::Expression(expr) = var {
+                        process_suffixes(expr.iter_suffixes(), functions)?;
+                    }
+                }
                 Value::Number(_) => {}
                 Value::String(_) => {}
                 Value::Symbol(_) => {}
-                Value::Var(_) => todo!("handle var"),
             }
             if let Some(tail) = binop {
                 process_expression(None, tail.rhs(), functions)?;
@@ -189,6 +235,27 @@ fn process_expression<'a, 'b>(
             process_expression(None, expression, functions)?;
         }
         Expression::Parentheses { .. } => unreachable!(),
+    }
+    Ok(())
+}
+
+fn process_assignment<
+    'a,
+    N: Iterator<Item = T>,
+    E: Iterator<Item = &'a Expression<'a>>,
+    T: Into<FunctionName<'a>> + 'a,
+>(
+    name_list: N,
+    expr_list: E,
+    functions: &mut Vec<FunctionSpan>,
+) -> Result<(), AstError<'a>> {
+    for item in name_list.into_iter().zip_longest(expr_list.into_iter()) {
+        let (name, expr) = match item {
+            EitherOrBoth::Both(var, expr) => (Some(var.into()), expr),
+            EitherOrBoth::Right(expr) => (None, expr),
+            EitherOrBoth::Left(_) => continue,
+        };
+        process_expression(name, expr, functions)?;
     }
     Ok(())
 }
@@ -240,10 +307,7 @@ pub fn gather_function_line_spans<'a, 'b>(
                         {
                             Ok(identifier.as_ref())
                         } else {
-                            return Err(AstError::UnexpectedToken {
-                                token: token.token().to_owned(),
-                                additional: Some("expected identifier in dot-separated function name".into()),
-                            });
+                            return Err(unexpected_token(token, "expected identifier in dot-separated function name"));
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?
@@ -255,12 +319,10 @@ pub fn gather_function_line_spans<'a, 'b>(
                         formatted_name.push(':');
                         formatted_name.push_str(identifier);
                     } else {
-                        return Err(AstError::UnexpectedToken {
-                            token: method.token().to_owned(),
-                            additional: Some(
-                                "expected identifier as method name".into(),
-                            ),
-                        });
+                        return Err(unexpected_token(
+                            method,
+                            "expected identifier as method name",
+                        ));
                     }
                 }
                 let start = func.function_token().start_position().line();
@@ -274,27 +336,19 @@ pub fn gather_function_line_spans<'a, 'b>(
             }
             // Todo: process expressions with no variable name.
             Stmt::Assignment(asgn) => {
-                for (var, mut expr) in
-                    asgn.var_list().iter().zip(asgn.expr_list())
-                {
-                    process_expression(
-                        Some(FunctionName::Complex(var)),
-                        expr,
-                        functions,
-                    )?;
-                }
+                process_assignment(
+                    asgn.var_list().iter(),
+                    asgn.expr_list().iter(),
+                    functions,
+                )?;
             }
             // Todo: process expressions with no variable name.
             Stmt::LocalAssignment(asgn) => {
-                for (name, expr) in
-                    asgn.name_list().iter().zip(asgn.expr_list())
-                {
-                    process_expression(
-                        Some(FunctionName::Identifier(name)),
-                        expr,
-                        functions,
-                    )?;
-                }
+                process_assignment(
+                    asgn.name_list().iter(),
+                    asgn.expr_list().iter(),
+                    functions,
+                )?;
             }
             Stmt::Do(do_stmt) => {
                 gather_function_line_spans(do_stmt.block(), functions)?;
