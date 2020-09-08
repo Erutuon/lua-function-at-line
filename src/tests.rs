@@ -8,24 +8,45 @@ fn check_result(code: &str, expected: &[FunctionSpan]) {
     assert_eq!(&functions, &expected);
 }
 
+macro_rules! function_spans {
+    (
+        @ $name:literal [$start:literal - $end:literal]
+    ) => {
+        FunctionSpan {
+            start: $start,
+            end: $end,
+            name: Some($name.into()),
+        }
+    };
+    (
+        @ [$start:literal - $end:literal]
+    ) => {
+        FunctionSpan {
+            start: $start,
+            end: $end,
+            name: None,
+        }
+    };
+    (
+        $(
+            $($name:literal)? [$start:literal - $end:literal]
+        ),+ $(,)?
+    ) => {
+        [
+            $(
+                function_spans!(@ $($name)?[$start - $end])
+            ),+
+        ]
+    };
+}
+
 #[test]
 fn top_level_functions() {
     check_result(
         &"local function first_do() end
-        function then_do() end",
-        &[
-            FunctionSpan {
-                start: 1,
-                end: 1,
-                name: Some("first_do".into()),
-            },
-            FunctionSpan {
-                start: 2,
-                end: 2,
-                name: Some("then_do".into()),
-            },
-        ],
-    );
+        function then_do() end", &function_spans! [
+        "first_do"[1-1], "then_do"[2-2],
+    ]);
 }
 
 #[test]
@@ -35,20 +56,9 @@ fn local_function_in_local_function() {
             local function inner()
             end
             return x + y
-        end",
-        &[
-            FunctionSpan {
-                start: 1,
-                end: 5,
-                name: Some("add".into()),
-            },
-            FunctionSpan {
-                start: 2,
-                end: 3,
-                name: Some("inner".into()),
-            },
-        ],
-    );
+        end", &function_spans! [
+        "add"[1-5], "inner"[2-3],
+    ]);
 }
 
 #[test]
@@ -58,20 +68,9 @@ fn function_with_fields_in_function_with_fields() {
             function a.b.c()
                 local var = const;
             end
-        end",
-        &[
-            FunctionSpan {
-                start: 1,
-                end: 5,
-                name: Some("x.y:z".into()),
-            },
-            FunctionSpan {
-                start: 2,
-                end: 4,
-                name: Some("a.b.c".into()),
-            },
-        ],
-    );
+        end", &function_spans! [
+        "x.y:z"[1-5], "a.b.c"[2-4],
+    ]);
 }
 
 #[test]
@@ -92,20 +91,9 @@ fn spread_out_method_or_function_calls_are_compacted() {
                 .
                     indented
                         ()
-                    end",
-        &[
-            FunctionSpan {
-                start: 1,
-                end: 8,
-                name: Some("very.spread:out".into()),
-            },
-            FunctionSpan {
-                start: 10,
-                end: 16,
-                name: Some("very.indented".into()),
-            },
-        ],
-    );
+                    end", &function_spans! [
+        "very.spread:out"[1-8], "very.indented"[10-16],
+    ]);
 }
 
 #[test]
@@ -122,28 +110,10 @@ fn anonymous_function_in_local_variable() {
         end
     end
     
-    local parenthesized = (((function() end)))", &[
-        FunctionSpan {
-            name: Some("compact".into()),
-            start: 1,
-            end: 3,
-        },
-        FunctionSpan {
-            start: 7,
-            end: 11,
-            name: Some("spread".into()),
-        },
-        FunctionSpan {
-            start: 8,
-            end: 10,
-            name: Some("inner".into()),
-        },
-        FunctionSpan {
-            start: 13,
-            end: 13,
-            name: Some("parenthesized".into()),
-        },
-    ])
+    local parenthesized = (((function() end)))", &function_spans! [
+            "compact"[1-3], "spread"[7-11], "inner"[8-10], "parenthesized"[13-13],
+        ],
+    );
 }
 
 #[test]
@@ -154,31 +124,29 @@ fn anonymous_function_in_variable() {
         function inner()
             hello_world()
         end
-    end", &[
-        FunctionSpan {
-            name: Some("global".into()),
-            start: 3,
-            end: 7,
-        },
-        FunctionSpan {
-            name: Some("inner".into()),
-            start: 4,
-            end: 6,
-        }
-    ])
+    end", &function_spans! [
+        "global"[3-7], "inner"[4-6],
+    ]);
 }
 
 #[test]
 fn anonymous_function_in_field() {
-    check_result("x.y = function()
+    check_result(r#"x.y = function()
         local field = true
-    end", &[
-        FunctionSpan {
-            name: Some("x.y".into()),
-            start: 1,
-            end: 3,
-        }
-    ])
+    end
+    
+    x
+        [
+            "y"
+        ]
+        =
+        function()
+        end
+    
+    t[1] = function() end
+    t[true] = function() end"#, &function_spans! [
+        "x.y"[1-3], r#"x["y"]"#[10-11], "t[1]"[13-13], "t[true]"[14-14],
+    ]);
 }
 
 #[test]
@@ -193,27 +161,8 @@ fn anonymous_functions_binopped() {
 
     end) - (function()
     
-    end)", &[
-        FunctionSpan {
-            start: 1,
-            end: 3,
-            name: None,
-        },
-        FunctionSpan {
-            start: 3,
-            end: 5,
-            name: None,
-        },
-        FunctionSpan {
-            start: 7,
-            end: 9,
-            name: None,
-        },
-        FunctionSpan {
-            start: 9,
-            end: 11,
-            name: None,
-        },
+    end)", &function_spans![
+        [1-3], [3-5], [7-9], [9-11],
     ]);
 }
 
@@ -225,16 +174,20 @@ fn anonymous_functions_unopped() {
     
     _ = #function()
 
-    end", &[
-        FunctionSpan {
-            start: 1,
-            end: 3,
-            name: None,
-        },
-        FunctionSpan {
-            start: 5,
-            end: 7,
-            name: None,
-        },
+    end", &function_spans! [
+        [1-3], [5-7],
+    ]);
+}
+
+#[test]
+fn anonymous_function_in_assignment_without_variable() {
+    check_result("local x, y = 1, 2,
+    function()
+    end
+    
+    x, y = 1, 2,
+    function()
+    end", &function_spans![
+        [2-3], [6-7]
     ]);
 }
