@@ -1,10 +1,27 @@
-use crate::{gather_function_line_spans, FunctionSpan};
+use crate::{gather_function_line_spans, FunctionSpan, FunctionNameSegment};
 use full_moon::parse;
 
-fn check_result(code: &str, expected: &[FunctionSpan]) {
-    let mut functions = Vec::new();
+#[derive(Debug, Eq, PartialEq)]
+struct Function {
+    start: usize,
+    end: usize,
+    name: Option<String>,
+}
+
+fn check_result(code: &str, expected: &[Function]) {
+    let mut function_spans = Vec::new();
     let code = parse(code).unwrap();
-    gather_function_line_spans(&code.nodes(), &mut functions).unwrap();
+    gather_function_line_spans(&code.nodes(), &mut function_spans).unwrap();
+    let functions = function_spans.into_iter().map(|FunctionSpan { start, end, name }: FunctionSpan| {
+        let name = if name.first == FunctionNameSegment::Anonymous && name.middle.is_empty() {
+            None
+        } else {
+            Some(name.to_string())
+        };
+        Function {
+            start, end, name,
+        }
+    }).collect::<Vec<_>>();
     assert_eq!(&functions, &expected);
 }
 
@@ -12,7 +29,7 @@ macro_rules! function_spans {
     (
         @ $name:literal [$start:literal - $end:literal]
     ) => {
-        FunctionSpan {
+        Function {
             start: $start,
             end: $end,
             name: Some($name.into()),
@@ -21,7 +38,7 @@ macro_rules! function_spans {
     (
         @ [$start:literal - $end:literal]
     ) => {
-        FunctionSpan {
+        Function {
             start: $start,
             end: $end,
             name: None,
@@ -168,7 +185,7 @@ fn anonymous_functions_binopped() {
 
 #[test]
 fn anonymous_functions_unopped() {
-    check_result("_ = -function()
+    check_result("local _ = -function()
 
     end
     
@@ -189,5 +206,72 @@ fn anonymous_function_in_assignment_without_variable() {
     function()
     end", &function_spans![
         [2-3], [6-7]
+    ]);
+}
+
+#[test]
+fn function_in_table_literal() {
+    check_result(r#"t = {
+        function()
+        end,
+        get = function()
+        end
+    }
+    
+    local mt = {
+        function()
+        end,
+        __newindex = function(self, k, v)
+            rawset(self, k, v)
+        end,
+        __index = {
+            get = function(self, k)
+            end,
+            ["set"] = function(self, k, v)
+            end,
+        },
+    }
+    
+    ({ "value", get = function(self, k) return rawget(self, k) end }):get(1)"#, &function_spans![
+        [2-3], "t.get"[4-5],
+        "mt[1]"[9-10], "mt.__newindex"[11-13], "mt.__index.get"[14-15], r#"mt.__index["set"]"#[16-17],
+        "?.get"[21-21],
+    ]);
+}
+
+#[test]
+fn function_in_function_arguments() {
+    check_result("local _ = call(
+        function()
+            do_something(function()
+            end)
+        end
+    )
+    
+    result = use_function(function()
+    end)", &function_spans! [
+        [2-5], [3-4], [8-9],
+    ]);
+}
+
+#[test]
+fn function_in_table_constructor_as_function_argument() {
+    check_result(r#"local _ = call {
+        function()
+            do_something(function()
+            end)
+        end,
+        identifier = function()
+        end,
+        ["string"] = function()
+        end,
+    }
+    
+    result = use_function{function()
+    end}
+    
+    use_function{function()
+    end}"#, &function_spans! [
+        [2-5], [3-4], [6-7], [8-9], [12-13], [15-16],
     ]);
 }

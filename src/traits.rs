@@ -5,7 +5,7 @@ use full_moon::{
         VarExpression,
     },
     tokenizer::TokenReference,
-};
+ast::MethodCall};
 
 pub(crate) trait FirstToken {
     fn first_token(&self) -> &TokenReference;
@@ -103,6 +103,31 @@ impl<'a> FirstToken for Index<'a> {
         match self {
             Index::Brackets { brackets, .. } => brackets.first_token(),
             Index::Dot { dot, .. } => dot,
+        }
+    }
+}
+
+impl<'a> FirstToken for Call<'a> {
+    fn first_token(&self) -> &TokenReference {
+        match self {
+            Call::AnonymousCall(call) => call.first_token(),
+            Call::MethodCall(call) => call.first_token(),
+        }
+    }
+}
+
+impl<'a> FirstToken for MethodCall<'a> {
+    fn first_token(&self) -> &TokenReference {
+        self.name()
+    }
+}
+
+impl<'a> FirstToken for FunctionArgs<'a> {
+    fn first_token(&self) -> &TokenReference {
+        match self {
+            FunctionArgs::Parentheses { parentheses, .. } => parentheses.first_token(),
+            FunctionArgs::String(string) => string,
+            FunctionArgs::TableConstructor(table) => table.first_token(),
         }
     }
 }

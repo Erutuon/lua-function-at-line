@@ -1,11 +1,11 @@
 use full_moon::parse;
 
 fn main() {
-    dbg!(parse(r#"x
-    [
-        "y"
-    ]
-    =
-    function()
+    dbg!(parse(r#"local _ = -function()
+
+    end
+    
+    _ = #function()
+
     end"#).unwrap());
 }
