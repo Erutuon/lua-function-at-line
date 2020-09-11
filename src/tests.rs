@@ -3,9 +3,9 @@ use full_moon::parse;
 
 #[derive(Debug, Eq, PartialEq)]
 struct Function {
+    name: Option<String>,
     start: usize,
     end: usize,
-    name: Option<String>,
 }
 
 fn check_result(code: &str, expected: &[Function]) {
@@ -210,6 +210,56 @@ fn anonymous_function_in_assignment_without_variable() {
 }
 
 #[test]
+fn function_in_function_arguments() {
+    check_result("local _ = call(
+        function()
+            do_something(function()
+            end)
+        end
+    )
+    
+    result = use_function(function()
+    end)", &function_spans! [
+        [2-5], [3-4], [8-9],
+    ]);
+}
+
+#[test]
+fn function_in_table_index() {
+    check_result("local _ = {
+        [function()
+        
+        end] = {}
+    }", &function_spans![
+        [2-4],
+    ]);
+}
+
+// #[cfg(FALSE)]
+#[test]
+fn function_in_table_constructor_as_function_argument() {
+    check_result(r#"local _ = call {
+        function()
+            do_something(function()
+            end)
+        end,
+        identifier = function()
+        end,
+        ["string"] = function()
+        end,
+    }
+    
+    result = use_function{function()
+    end}
+    
+    use_function{function()
+    end}"#, &function_spans! [
+        "?[1]"[2-5], [3-4], "?.identifier"[6-7], r#"?["string"]"#[8-9], "?[1]"[12-13], "?[1]"[15-16],
+    ]);
+}
+
+// #[cfg(FALSE)]
+#[test]
 fn function_in_table_literal() {
     check_result(r#"t = {
         function()
@@ -232,46 +282,11 @@ fn function_in_table_literal() {
         },
     }
     
-    ({ "value", get = function(self, k) return rawget(self, k) end }):get(1)"#, &function_spans![
-        [2-3], "t.get"[4-5],
-        "mt[1]"[9-10], "mt.__newindex"[11-13], "mt.__index.get"[14-15], r#"mt.__index["set"]"#[16-17],
-        "?.get"[21-21],
-    ]);
-}
-
-#[test]
-fn function_in_function_arguments() {
-    check_result("local _ = call(
-        function()
-            do_something(function()
-            end)
-        end
-    )
+    ({ "value", get = function(self, k) return rawget(self, k) end }):get(1)
     
-    result = use_function(function()
-    end)", &function_spans! [
-        [2-5], [3-4], [8-9],
-    ]);
-}
-
-#[test]
-fn function_in_table_constructor_as_function_argument() {
-    check_result(r#"local _ = call {
-        function()
-            do_something(function()
-            end)
-        end,
-        identifier = function()
-        end,
-        ["string"] = function()
-        end,
-    }
-    
-    result = use_function{function()
-    end}
-    
-    use_function{function()
-    end}"#, &function_spans! [
-        [2-5], [3-4], [6-7], [8-9], [12-13], [15-16],
+    local _ = ({ "value", get = function(self, k) return rawget(self, k) end }):get(1)"#, &function_spans![
+        "t[1]"[2-3], "t.get"[4-5],
+        "mt[1]"[9-10], "mt.__newindex"[11-13], "mt.__index.get"[15-16], r#"mt.__index["set"]"#[17-18],
+        "?.get"[22-22], "?.get"[24-24],
     ]);
 }
