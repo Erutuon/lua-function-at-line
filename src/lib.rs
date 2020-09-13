@@ -1,32 +1,24 @@
 use full_moon::{
     ast::BinOp,
     ast::Field,
+    ast::FunctionCall,
     ast::FunctionName,
     ast::TableConstructor,
     ast::UnOp,
     ast::VarExpression,
     ast::{
-        AstError, Block, Call, Expression, FunctionArgs, Index, Prefix, Stmt,
-        Suffix, Value, Var,
+        AstError, Block, Call, Expression, FunctionArgs, Index, Prefix, Stmt, Suffix, Value, Var,
     },
     tokenizer::Token,
     tokenizer::{TokenReference, TokenType},
-ast::FunctionCall};
-use itertools::{EitherOrBoth, Itertools};
-use std::{
-    borrow::Cow, convert::TryFrom, convert::TryInto, fmt::Display,
 };
-// use trace::trace;
-
-// trace::init_depth_var!();
+use itertools::{EitherOrBoth, Itertools};
+use std::{borrow::Cow, collections::HashMap, convert::TryFrom, convert::TryInto, fmt::Display};
 
 mod traits;
 use traits::FirstToken;
 
-fn unexpected_token<'a>(
-    token_ref: &'a TokenReference<'a>,
-    msg: &'_ str,
-) -> AstError<'a> {
+fn unexpected_token<'a>(token_ref: &'a TokenReference<'a>, msg: &'_ str) -> AstError<'a> {
     AstError::UnexpectedToken {
         token: token_ref.token().to_owned(),
         additional: Some(msg.to_owned().into()),
@@ -66,9 +58,7 @@ impl<'a> From<&'a Expression<'a>> for FunctionNameSegment<'a> {
 impl<'a> TryFrom<&'a TokenReference<'a>> for FunctionNameSegment<'a> {
     type Error = AstError<'a>;
 
-    fn try_from(
-        token_ref: &'a TokenReference<'a>,
-    ) -> Result<Self, Self::Error> {
+    fn try_from(token_ref: &'a TokenReference<'a>) -> Result<Self, Self::Error> {
         if let TokenType::Identifier { identifier } = token_ref.token_type() {
             Ok(FunctionNameSegment::Name(identifier))
         } else {
@@ -83,15 +73,13 @@ impl<'a> TryFrom<TableKey<'a>> for FunctionNameSegment<'a> {
         let value = match key {
             TableKey::Positional(index) => {
                 FunctionNameSegment::Expression(Cow::Owned(Expression::Value {
-                    value: Box::new(Value::Number(Cow::Owned(
-                        TokenReference::new(
-                            vec![],
-                            Token::new(TokenType::Number {
-                                text: index.to_string().into(),
-                            }),
-                            vec![],
-                        ),
-                    ))),
+                    value: Box::new(Value::Number(Cow::Owned(TokenReference::new(
+                        vec![],
+                        Token::new(TokenType::Number {
+                            text: index.to_string().into(),
+                        }),
+                        vec![],
+                    )))),
                     binop: None,
                 }))
             }
@@ -144,11 +132,9 @@ impl<'a> Display for FunctionNameStack<'a> {
             FunctionNameSegment::Anonymous => write!(f, "?")?,
             FunctionNameSegment::Name(name) => write!(f, "{}", name)?,
             FunctionNameSegment::Expression(expr) => {
-                if let Expression::Value { value, binop: None } = expr.as_ref()
-                {
-                    if let Value::String(token)
-                    | Value::Number(token)
-                    | Value::Symbol(token) = value.as_ref()
+                if let Expression::Value { value, binop: None } = expr.as_ref() {
+                    if let Value::String(token) | Value::Number(token) | Value::Symbol(token) =
+                        value.as_ref()
                     {
                         write!(f, "[{}]", remove_trivia(token))?;
                     } else {
@@ -169,12 +155,9 @@ impl<'a> Display for FunctionNameStack<'a> {
                     write!(f, ".{}", name)?;
                 }
                 FunctionNameSegment::Expression(expr) => {
-                    if let Expression::Value { value, binop: None } =
-                        expr.as_ref()
-                    {
-                        if let Value::String(token)
-                        | Value::Number(token)
-                        | Value::Symbol(token) = value.as_ref()
+                    if let Expression::Value { value, binop: None } = expr.as_ref() {
+                        if let Value::String(token) | Value::Number(token) | Value::Symbol(token) =
+                            value.as_ref()
                         {
                             write!(f, "[{}]", remove_trivia(token))?;
                         } else {
@@ -230,17 +213,11 @@ impl<'a> TryFrom<&'a VarExpression<'a>> for FunctionNameStack<'a> {
     fn try_from(var_expr: &'a VarExpression<'a>) -> Result<Self, Self::Error> {
         let mut stack = match var_expr.prefix() {
             Prefix::Expression(expr) => {
-                return Err(unexpected_token(
-                    expr.first_token(),
-                    "expected identifier",
-                ))
+                return Err(unexpected_token(expr.first_token(), "expected identifier"))
             }
             Prefix::Name(name) => {
-                if let TokenType::Identifier { identifier } = name.token_type()
-                {
-                    FunctionNameStack::new(FunctionNameSegment::Name(
-                        identifier,
-                    ))
+                if let TokenType::Identifier { identifier } = name.token_type() {
+                    FunctionNameStack::new(FunctionNameSegment::Name(identifier))
                 } else {
                     return Err(unexpected_token(name, "expected identifier"));
                 }
@@ -256,20 +233,13 @@ impl<'a> TryFrom<&'a VarExpression<'a>> for FunctionNameStack<'a> {
                 }
                 Suffix::Index(index) => match index {
                     Index::Brackets { expression, .. } => {
-                        FunctionNameSegment::Expression(Cow::Borrowed(
-                            expression,
-                        ))
+                        FunctionNameSegment::Expression(Cow::Borrowed(expression))
                     }
                     Index::Dot { name, .. } => {
-                        if let TokenType::Identifier { identifier } =
-                            name.token_type()
-                        {
+                        if let TokenType::Identifier { identifier } = name.token_type() {
                             FunctionNameSegment::Name(identifier)
                         } else {
-                            return Err(unexpected_token(
-                                name,
-                                "expected identifier",
-                            ));
+                            return Err(unexpected_token(name, "expected identifier"));
                         }
                     }
                 },
@@ -283,9 +253,7 @@ impl<'a> TryFrom<&'a VarExpression<'a>> for FunctionNameStack<'a> {
 impl<'a> TryFrom<&'a TokenReference<'a>> for FunctionNameStack<'a> {
     type Error = AstError<'a>;
 
-    fn try_from(
-        token_ref: &'a TokenReference<'a>,
-    ) -> Result<Self, Self::Error> {
+    fn try_from(token_ref: &'a TokenReference<'a>) -> Result<Self, Self::Error> {
         if let TokenType::Identifier { identifier } = token_ref.token_type() {
             Ok(FunctionNameStack::new(FunctionNameSegment::Name(
                 identifier,
@@ -306,7 +274,6 @@ impl<'a> TryFrom<&'a Var<'a>> for FunctionNameStack<'a> {
     }
 }
 
-// #[trace(disable(suffixes))]
 fn process_suffixes<'a, 'b>(
     suffixes: impl Iterator<Item = &'a Suffix<'a>> + 'a,
     functions: &'b mut Vec<FunctionSpan<'a>>,
@@ -320,15 +287,15 @@ fn process_suffixes<'a, 'b>(
             match args {
                 FunctionArgs::Parentheses { arguments, .. } => {
                     for arg in arguments {
-                        process_expression(
-                            &mut FunctionNameStack::anonymous(),
-                            arg,
-                            functions,
-                        )?;
+                        process_expression(&mut FunctionNameStack::anonymous(), arg, functions)?;
                     }
                 }
                 FunctionArgs::TableConstructor(table) => {
-                    process_table_constructor(&mut FunctionNameStack::anonymous(), table, functions)?;
+                    process_table_constructor(
+                        &mut FunctionNameStack::anonymous(),
+                        table,
+                        functions,
+                    )?;
                 }
                 FunctionArgs::String(_) => {}
             }
@@ -337,7 +304,6 @@ fn process_suffixes<'a, 'b>(
     Ok(())
 }
 
-// #[trace(disable(suffixes))]
 fn process_function_call<'a, 'b>(
     call: &'a FunctionCall<'a>,
     functions: &'b mut Vec<FunctionSpan<'a>>,
@@ -357,14 +323,9 @@ enum TableKey<'a> {
 }
 
 impl<'a> TableKey<'a> {
-    fn with_value_from_field(
-        field: &'a Field<'a>,
-        index: &mut u64,
-    ) -> (Self, &'a Expression<'a>) {
+    fn with_value_from_field(field: &'a Field<'a>, index: &mut u64) -> (Self, &'a Expression<'a>) {
         match field {
-            Field::ExpressionKey { key, value, .. } => {
-                (TableKey::Expression(key), value)
-            }
+            Field::ExpressionKey { key, value, .. } => (TableKey::Expression(key), value),
             Field::NameKey { key, value, .. } => (TableKey::Name(key), value),
             Field::NoKey(value) => {
                 *index += 1;
@@ -374,7 +335,6 @@ impl<'a> TableKey<'a> {
     }
 }
 
-// #[trace]
 fn process_table_constructor<'a>(
     name: &mut FunctionNameStack<'a>,
     table: &'a TableConstructor<'a>,
@@ -406,12 +366,8 @@ fn strip_parentheses<'a>(mut expr: &'a Expression<'a>) -> UsefulExpression<'a> {
         expr = expression.as_ref();
     }
     match expr {
-        Expression::Parentheses { .. } => {
-            unreachable!("parentheses have been stripped")
-        }
-        Expression::UnaryOperator { unop, expression } => {
-            UsefulExpression::UnOp(unop, expression)
-        }
+        Expression::Parentheses { .. } => unreachable!("parentheses have been stripped"),
+        Expression::UnaryOperator { unop, expression } => UsefulExpression::UnOp(unop, expression),
         Expression::Value { value, binop } => match binop {
             Some(op) => UsefulExpression::BinOp(value, op.bin_op(), op.rhs()),
             None => {
@@ -420,12 +376,11 @@ fn strip_parentheses<'a>(mut expr: &'a Expression<'a>) -> UsefulExpression<'a> {
                 } else {
                     UsefulExpression::Single(value)
                 }
-            },
+            }
         },
     }
 }
 
-// #[trace]
 fn process_value<'a, 'b>(
     var: &mut FunctionNameStack<'a>,
     value: &'a Value<'a>,
@@ -462,7 +417,6 @@ fn process_value<'a, 'b>(
     Ok(())
 }
 
-// #[trace]
 fn process_expression<'a, 'b>(
     var: &mut FunctionNameStack<'a>,
     expr: &'a Expression<'a>,
@@ -475,25 +429,16 @@ fn process_expression<'a, 'b>(
             process_value(var, value, functions)?;
         }
         UsefulExpression::UnOp(_, value) => {
-            process_expression(
-                &mut FunctionNameStack::anonymous(),
-                value,
-                functions,
-            )?;
+            process_expression(&mut FunctionNameStack::anonymous(), value, functions)?;
         }
         UsefulExpression::BinOp(left, _, right) => {
             process_value(&mut FunctionNameStack::anonymous(), left, functions)?;
-            process_expression(
-                &mut FunctionNameStack::anonymous(),
-                right,
-                functions,
-            )?;
+            process_expression(&mut FunctionNameStack::anonymous(), right, functions)?;
         }
     }
     Ok(())
 }
 
-// #[trace(disable(name_list, expr_list))]
 fn process_assignment<
     'a,
     'b,
@@ -527,10 +472,7 @@ pub fn gather_function_line_spans<'a, 'b>(
                 let end = func.func_body().end_token().end_position().line();
                 let name = func.name().try_into()?;
                 functions.push(FunctionSpan { name, start, end });
-                gather_function_line_spans(
-                    func.func_body().block(),
-                    functions,
-                )?;
+                gather_function_line_spans(func.func_body().block(), functions)?;
             }
             Stmt::FunctionDeclaration(func) => {
                 let start = func.function_token().start_position().line();
@@ -543,11 +485,7 @@ pub fn gather_function_line_spans<'a, 'b>(
                 gather_function_line_spans(func.body().block(), functions)?;
             }
             Stmt::Assignment(asgn) => {
-                process_assignment(
-                    asgn.var_list().iter(),
-                    asgn.expr_list().iter(),
-                    functions,
-                )?;
+                process_assignment(asgn.var_list().iter(), asgn.expr_list().iter(), functions)?;
             }
             Stmt::LocalAssignment(asgn) => {
                 process_assignment(
@@ -590,5 +528,51 @@ pub fn gather_function_line_spans<'a, 'b>(
     Ok(())
 }
 
-#[cfg(test)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct FunctionNameLine {
+    pub start: usize,
+    pub end: usize,
+    pub name: String,
+}
+
+impl<'a> From<FunctionSpan<'a>> for FunctionNameLine {
+    fn from(FunctionSpan { start, end, name }: FunctionSpan<'a>) -> Self {
+        FunctionNameLine {
+            start,
+            end,
+            name: name.to_string(),
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct FunctionFinder {
+    cache: HashMap<String, Option<Vec<FunctionNameLine>>>,
+}
+
+impl FunctionFinder {
+    pub fn new() -> Self { Self::default() }
+    pub fn get_functions(&mut self, code: String) -> Option<&Vec<FunctionNameLine>> {
+        self.cache
+            .entry(code.clone())
+            .or_insert_with(|| {
+                let ast = full_moon::parse(&code).ok()?;
+                let mut functions = vec![];
+                gather_function_line_spans(ast.nodes(), &mut functions).ok()?;
+                Some(functions.into_iter().map(FunctionNameLine::from).collect())
+            })
+            .as_ref()
+    }
+    // line is zero-indexed; the start and end lines are one-indexed.
+    pub fn function_from_line(&mut self, code: &str, line: usize) -> Option<&str> {
+        self.get_functions(code.into()).and_then(|functions| {
+            functions
+                .iter()
+                .filter(|FunctionNameLine { start, end, .. }| (*start..*end).contains(&line))
+                .last()
+                .map(|name_line| name_line.name.as_ref())
+        })
+    }
+}
+
 mod tests;

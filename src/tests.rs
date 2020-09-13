@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use crate::{gather_function_line_spans, FunctionSpan, FunctionNameSegment};
 use full_moon::parse;
 
