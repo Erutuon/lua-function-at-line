@@ -575,4 +575,6 @@ impl Module {
     }
 }
 
+mod ffi;
+
 mod tests;
