@@ -13,7 +13,7 @@ use full_moon::{
     tokenizer::{TokenReference, TokenType},
 };
 use itertools::{EitherOrBoth, Itertools};
-use std::{borrow::Cow, collections::HashMap, convert::TryFrom, convert::TryInto, fmt::Display};
+use std::{borrow::Cow, convert::TryFrom, convert::TryInto, fmt::Display};
 
 mod traits;
 use traits::FirstToken;
@@ -545,33 +545,33 @@ impl<'a> From<FunctionSpan<'a>> for FunctionNameLine {
     }
 }
 
-#[derive(Default)]
-pub struct FunctionFinder {
-    cache: HashMap<String, Option<Vec<FunctionNameLine>>>,
+#[repr(C)]
+pub struct Module {
+    function_record: Vec<FunctionNameLine>,
 }
 
-impl FunctionFinder {
-    pub fn new() -> Self { Self::default() }
-    pub fn get_functions(&mut self, code: String) -> Option<&Vec<FunctionNameLine>> {
-        self.cache
-            .entry(code.clone())
-            .or_insert_with(|| {
-                let ast = full_moon::parse(&code).ok()?;
-                let mut functions = vec![];
-                gather_function_line_spans(ast.nodes(), &mut functions).ok()?;
-                Some(functions.into_iter().map(FunctionNameLine::from).collect())
-            })
-            .as_ref()
+impl Module {
+    pub fn new(code: &str) -> Option<Self> {
+        Some(Self { function_record: Self::get_function_record(code).ok()? })
     }
-    // line is zero-indexed; the start and end lines are one-indexed.
-    pub fn function_from_line(&mut self, code: &str, line: usize) -> Option<&str> {
-        self.get_functions(code.into()).and_then(|functions| {
-            functions
-                .iter()
-                .filter(|FunctionNameLine { start, end, .. }| (*start..*end).contains(&line))
-                .last()
-                .map(|name_line| name_line.name.as_ref())
-        })
+
+    fn get_function_record<'a>(code: &'a str) -> Result<Vec<FunctionNameLine>, String> {
+        let ast = full_moon::parse(&code).map_err(|e| e.to_string())?;
+        let mut functions = vec![];
+        gather_function_line_spans(ast.nodes(), &mut functions).map_err(|e| e.to_string())?;
+        Ok(functions.into_iter().map(FunctionNameLine::from).collect())
+    }
+
+    pub fn get_function(&self, line: usize) -> Option<&str> {
+        self.function_record
+            .iter()
+            .filter(|FunctionNameLine { start, end, .. }| (*start..*end).contains(&line))
+            .last()
+            .map(|name_line| name_line.name.as_ref())
+    }
+
+    pub fn function_record(&self) -> &[FunctionNameLine] {
+        &self.function_record
     }
 }
 
