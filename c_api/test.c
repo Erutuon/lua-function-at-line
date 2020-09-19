@@ -1,3 +1,11 @@
+// To compile:
+// $ cargo build --release
+// $ cp target/release/liblua_function_at_line_c.so .
+// $ gcc test.c -o test -L. -Iinclude -llua_function_at_line_c -lm
+//
+// To run:
+// $ ./test some_lua_file.lua
+
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
@@ -61,7 +69,7 @@ string_ref * get_lines(const char * str, size_t len, size_t * out_line_count) {
     return lines;
 }
 
-void get_function_names(Module * module, string_ref * const names, size_t len) {
+void get_function_names(lua_module_function_lines * module, string_ref * const names, size_t len) {
     string_ref * cur_name = names;
     // This assumes that lines in full_moon are zero-based.
     size_t line = 0;
@@ -75,7 +83,7 @@ void get_function_names(Module * module, string_ref * const names, size_t len) {
 }
 
 void show_lines_with_function_names(const char * lua_code, size_t lua_code_len) {
-    Module * module = lua_module_function_lines_new(lua_code);
+    lua_module_function_lines * module = lua_module_function_lines_new(lua_code);
     if (!module) {
         printf("failed to parse Lua code:\n%s\n", lua_code);
         return;
@@ -108,7 +116,7 @@ void show_lines_with_function_names(const char * lua_code, size_t lua_code_len) 
         }
         // Assume cur_line-> len is less than or equal to INT_MAX.
         printf(
-            "%*zu %*s%.*s %.*s\n",
+            "%*zu   %*s%.*s   %.*s\n",
             (int) line_number_len, line_number,
             (int) (max_function_name_len - function_name_len), "",
             (int) function_name_len, function_name,
