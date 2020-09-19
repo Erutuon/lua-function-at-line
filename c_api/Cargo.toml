@@ -1,0 +1,11 @@
+[package]
+name = "lua-function-at-line-c"
+version = "0.1.0"
+authors = ["Erutuon <5840197+Erutuon@users.noreply.github.com>"]
+edition = "2018"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+lua-function-at-line = { path = ".." }

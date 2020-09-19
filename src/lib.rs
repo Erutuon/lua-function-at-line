@@ -43,12 +43,6 @@ enum FunctionNameSegment<'a> {
     Expression(Cow<'a, Expression<'a>>),
 }
 
-// impl<'a> From<Var<'a>> for FunctionNameSegment<'a> {
-//     fn from(_: Var<'a>) -> Self {
-//         todo!()
-//     }
-// }
-
 impl<'a> From<&'a Expression<'a>> for FunctionNameSegment<'a> {
     fn from(expr: &'a Expression<'a>) -> Self {
         FunctionNameSegment::Expression(Cow::Borrowed(expr))
@@ -90,14 +84,13 @@ impl<'a> TryFrom<TableKey<'a>> for FunctionNameSegment<'a> {
     }
 }
 
-// Function name:
-// identifier
-// optional suffixes (dot index or bracket index)
-// optional method name
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionNameStack<'a> {
+    // identifier
     first: FunctionNameSegment<'a>,
+    // optional suffixes (dot index or bracket index)
     middle: Vec<FunctionNameSegment<'a>>,
+    // optional method name
     method: Option<FunctionNameSegment<'a>>,
 }
 
@@ -574,7 +567,5 @@ impl Module {
         &self.function_record
     }
 }
-
-mod ffi;
 
 mod tests;
