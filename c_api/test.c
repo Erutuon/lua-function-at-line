@@ -83,7 +83,7 @@ void get_function_names(lua_module_function_lines * module, string_ref * const n
 }
 
 void show_lines_with_function_names(const char * lua_code, size_t lua_code_len) {
-    lua_module_function_lines * module = lua_module_function_lines_new(lua_code);
+    lua_module_function_lines * module = lua_module_function_lines_new(lua_code, lua_code_len);
     if (!module) {
         printf("failed to parse Lua code:\n%s\n", lua_code);
         return;

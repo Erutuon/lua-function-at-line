@@ -1,14 +1,15 @@
-use std::{os::raw::c_char, ffi::CStr};
+use std::os::raw::c_char;
 
 use lua_function_at_line::Module;
 
 #[no_mangle]
-pub unsafe extern "C" fn lua_module_function_lines_new(code: *const c_char) -> *mut Module {
-    unsafe fn inner(code: *const c_char) -> Option<*mut Module> {
-        let code = CStr::from_ptr(code).to_str().ok()?;
+pub unsafe extern "C" fn lua_module_function_lines_new(code: *const c_char, code_len: usize) -> *mut Module {
+    unsafe fn inner(code: *const c_char, code_len: usize) -> Option<*mut Module> {
+        let code = &*std::ptr::slice_from_raw_parts(code as *const u8, code_len);
+        let code = std::str::from_utf8(code).ok()?;
         Module::new(code).map(|m| Box::into_raw(Box::new(m)))
     }
-    match inner(code) {
+    match inner(code, code_len) {
         Some(ptr) => ptr,
         None => std::ptr::null::<Module>() as _,
     }
